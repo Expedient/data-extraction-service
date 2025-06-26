@@ -8,6 +8,11 @@ you may not use this file except in compliance with the Elastic License 2.0.
 local args = ngx.req.get_uri_args()
 local fetchKey = args["local_file_path"]
 
+-- Always set OCR-related headers for PDF processing
+ngx.req.set_header("X-Tika-PDFOcrStrategy", "auto")
+ngx.req.set_header("X-Tika-PDFextractInlineImages", "true")
+ngx.log(ngx.STDERR, "Added OCR headers to request")
+
 if fetchKey then
     ngx.log(ngx.STDERR, "Got fetchkey " .. fetchKey)
     ngx.req.set_header("fetcherName", "fsf")

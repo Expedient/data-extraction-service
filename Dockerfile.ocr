@@ -1,0 +1,65 @@
+FROM openresty/openresty:1.21.4.1-0-alpine@sha256:42475b68d2f3270307d4359b39083eb6b514edb2b816970d990f585579929f00
+EXPOSE 8091
+EXPOSE 9998
+
+WORKDIR /app
+
+# these fix various known issues, don't remove
+VOLUME /sys/fs/cgroup
+RUN mkdir /run/openrc\
+  && touch /run/openrc/softlevel
+
+# get services we need - install tesseract and language data
+RUN apk add --no-cache openrc openjdk8 curl python3 py3-pip tesseract-ocr
+
+# Add build dependencies for Python packages
+RUN apk add --no-cache build-base python3-dev openblas-dev g++ gcc gfortran musl-dev linux-headers
+
+# Manually download and place English language data
+RUN mkdir -p /usr/share/tessdata && \
+    wget -O /usr/share/tessdata/eng.traineddata https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata && \
+    chmod 755 /usr/share/tessdata/eng.traineddata
+
+# Install Alpine-friendly Python dependencies
+# Use py3-numpy and py3-scipy from Alpine repo instead of pip
+RUN apk add --no-cache py3-numpy py3-pillow
+
+# Install ImageMagick for image preprocessing
+RUN apk add --no-cache imagemagick
+
+# Download Tika server
+RUN wget https://archive.apache.org/dist/tika/2.8.0/tika-server-standard-2.8.0.jar
+
+# Verify Tesseract is installed and working
+RUN tesseract --version && \
+    tesseract --list-langs
+
+# Copy Tika configuration for OCR
+COPY tika-config.xml /app/tika-config.xml
+
+# Create a startup script
+RUN echo '#!/bin/sh' > /app/startup.sh && \
+    echo 'set -e' >> /app/startup.sh && \
+    echo '' >> /app/startup.sh && \
+    echo '# Start Tika server in the background' >> /app/startup.sh && \
+    echo 'echo "Starting Tika Server with OCR support..."' >> /app/startup.sh && \
+    echo 'java -Dtika.config=/app/tika-config.xml -Djava.io.tmpdir=/tmp -jar /app/tika-server-standard-2.8.0.jar -h 0.0.0.0 &' >> /app/startup.sh && \
+    echo 'TIKA_PID=$!' >> /app/startup.sh && \
+    echo 'echo "Tika Server started with PID: $TIKA_PID"' >> /app/startup.sh && \
+    echo '' >> /app/startup.sh && \
+    echo '# Start Nginx in the foreground' >> /app/startup.sh && \
+    echo 'echo "Starting Nginx..."' >> /app/startup.sh && \
+    echo 'nginx -g "daemon off;"' >> /app/startup.sh && \
+    chmod +x /app/startup.sh
+
+# Configure Nginx to use port 8091 and proxy to Tika
+COPY nginx/ .
+RUN sed -i 's/listen       8090/listen       8091/g' /app/nginx.conf && \
+    sed -i 's/proxy_pass http:\/\/localhost:9998\/tika;/proxy_pass http:\/\/localhost:9998\/tika;/g' /app/nginx.conf
+
+RUN ln -sf /app/nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
+
+HEALTHCHECK CMD curl --fail http://localhost:8091/ping/ || exit 1
+
+# Run our startup script
+CMD ["/app/startup.sh"] 
